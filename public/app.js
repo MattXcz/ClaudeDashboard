@@ -223,7 +223,14 @@
           try { handle(JSON.parse(line.slice(6))); } catch { /* */ }
         }
       }
-      if (firstChunk) out.innerHTML = '<div class="result-line err">no response — is the <code>claude</code> CLI installed and logged in?</div>';
+      if (firstChunk) {
+        let diag = '';
+        try {
+          const d = await api('/api/doctor');
+          diag = d.bin ? `<br>CLI: <code>${esc(d.bin)}</code> · ${esc(d.version || '?')}` : '<br>CLI binary not found — set <code>CLAUDE_BIN</code> and restart.';
+        } catch { /* */ }
+        out.innerHTML = `<div class="result-line err">no response — is the <code>claude</code> CLI installed and logged in?${diag}</div>`;
+      }
     } catch (err) {
       out.innerHTML = `<div class="result-line err">${esc(err.message)}</div>`;
     } finally {

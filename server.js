@@ -16,7 +16,7 @@ const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
 const url = require('url');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const readline = require('readline');
 
 const PORT = process.env.PORT || 7777;
@@ -522,6 +522,46 @@ function simplifyEvent(e, project, sessionId) {
 }
 
 /* ----------------------------- chat bridge (claude CLI) ----------------------------- */
+let CLAUDE_BIN; // resolved once, cached
+
+function resolveClaudeBin() {
+  if (CLAUDE_BIN && fs.existsSync(CLAUDE_BIN)) return CLAUDE_BIN;
+  const home = os.homedir();
+  const candidates = [
+    process.env.CLAUDE_BIN,
+    path.join(home, '.claude', 'local', 'claude'), // local installer (aliased in shell rc — invisible to spawn)
+    path.join(home, '.local', 'bin', 'claude'),
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude',
+    path.join(home, '.npm-global', 'bin', 'claude'),
+    path.join(home, 'n', 'bin', 'claude'),
+  ].filter(Boolean);
+  // nvm installs
+  try {
+    const nvm = path.join(home, '.nvm', 'versions', 'node');
+    for (const v of fs.readdirSync(nvm)) candidates.push(path.join(nvm, v, 'bin', 'claude'));
+  } catch { /* no nvm */ }
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) { console.log('▸ claude CLI:', c); return (CLAUDE_BIN = c); } } catch { /* */ }
+  }
+  // PATH of this process
+  try {
+    const w = execSync(process.platform === 'win32' ? 'where claude' : 'command -v claude',
+      { encoding: 'utf8', timeout: 4000 }).trim().split('\n')[0];
+    if (w) { console.log('▸ claude CLI:', w); return (CLAUDE_BIN = w); }
+  } catch { /* not on PATH */ }
+  // user's login shell PATH (zsh/bash with profile loaded — catches nvm, volta, asdf…)
+  if (process.platform !== 'win32') {
+    try {
+      const shell = process.env.SHELL || '/bin/zsh';
+      const out = execSync(`${shell} -lc 'command -v claude' 2>/dev/null`, { encoding: 'utf8', timeout: 6000 }).trim();
+      const last = out.split('\n').filter(Boolean).pop();
+      if (last && fs.existsSync(last)) { console.log('▸ claude CLI (login shell):', last); return (CLAUDE_BIN = last); }
+    } catch { /* */ }
+  }
+  return null;
+}
+
 function handleChat(req, res) {
   let body = '';
   req.on('data', (c) => { body += c; if (body.length > 1e6) req.destroy(); });
@@ -538,31 +578,66 @@ function handleChat(req, res) {
       'Access-Control-Allow-Origin': '*',
     });
 
+    let ended = false;
+    const send = (obj) => {
+      if (ended) return;
+      try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { ended = true; }
+    };
+    const finish = () => { if (!ended) { ended = true; try { res.end(); } catch { /* */ } } };
+
+    const bin = resolveClaudeBin();
+    if (!bin) {
+      send({
+        type: 'error',
+        text: 'claude CLI not found. Install it (npm install -g @anthropic-ai/claude-code) or set the CLAUDE_BIN env var to its full path, then restart the dashboard.',
+      });
+      send({ type: 'done', code: 127 });
+      return finish();
+    }
+
     const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose'];
     if (p.sessionId) args.push('--resume', p.sessionId);
     if (p.model) args.push('--model', p.model);
     if (p.permissionMode && p.permissionMode !== 'default') args.push('--permission-mode', p.permissionMode);
 
-    const cwd = p.cwd && fs.existsSync(p.cwd) ? p.cwd : os.homedir();
-    const child = spawn('claude', args, { cwd, env: { ...process.env }, shell: process.platform === 'win32' });
+    let cwd = (p.cwd || '').trim();
+    if (cwd.startsWith('~')) cwd = path.join(os.homedir(), cwd.slice(1));
+    if (!cwd || !fs.existsSync(cwd)) cwd = os.homedir();
 
-    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
-    send({ type: 'status', text: 'started' });
+    const child = spawn(bin, args, { cwd, env: { ...process.env }, shell: process.platform === 'win32' });
 
+    send({ type: 'status', text: 'started', bin, cwd });
+
+    let sawStdout = false;
     const rl = readline.createInterface({ input: child.stdout });
     rl.on('line', (line) => {
       if (!line.trim()) return;
+      sawStdout = true;
       try { send(JSON.parse(line)); } catch { send({ type: 'raw', text: line.slice(0, 500) }); }
     });
     let errBuf = '';
     child.stderr.on('data', (d) => { errBuf += d; });
-    child.on('error', (err) => { send({ type: 'error', text: `Cannot start claude CLI: ${err.message}` }); res.end(); });
-    child.on('close', (code) => {
-      if (code !== 0 && errBuf) send({ type: 'error', text: errBuf.slice(0, 1000) });
-      send({ type: 'done', code });
-      res.end();
+    child.on('error', (err) => {
+      send({ type: 'error', text: `Cannot start claude CLI (${bin}): ${err.message}` });
+      send({ type: 'done', code: -1 });
+      finish();
     });
-    req.on('close', () => { try { child.kill('SIGTERM'); } catch { /* */ } });
+    child.on('close', (code) => {
+      if (!sawStdout) {
+        const detail = errBuf.trim().slice(0, 1200);
+        send({
+          type: 'error',
+          text: `claude exited with code ${code} and produced no output.` +
+            (detail ? `\n\nstderr:\n${detail}` : '') +
+            `\n\nTry running this in a terminal to check login/setup:\n${bin} -p "hi" --output-format stream-json --verbose`,
+        });
+      } else if (code !== 0 && errBuf.trim()) {
+        send({ type: 'error', text: errBuf.trim().slice(0, 1200) });
+      }
+      send({ type: 'done', code });
+      finish();
+    });
+    req.on('close', () => { ended = true; try { child.kill('SIGTERM'); } catch { /* */ } });
   });
 }
 
@@ -652,6 +727,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (route === '/api/chat' && req.method === 'POST') return handleChat(req, res);
+    if (route === '/api/doctor') {
+      const bin = resolveClaudeBin();
+      let version = null;
+      if (bin) {
+        try { version = execSync(`"${bin}" --version`, { encoding: 'utf8', timeout: 8000 }).trim(); } catch (e) { version = 'error: ' + e.message.slice(0, 200); }
+      }
+      return json(res, { bin, version, dataDir: CLAUDE_DIR, dataDirExists: fs.existsSync(PROJECTS_DIR), node: process.version });
+    }
 
     /* static */
     let file = route === '/' ? '/index.html' : route;
@@ -671,6 +754,9 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`\n  ◤ Claude Dashboard ◢\n`);
   console.log(`  ▸ http://localhost:${PORT}`);
-  console.log(`  ▸ data: ${CLAUDE_DIR}\n`);
+  console.log(`  ▸ data: ${CLAUDE_DIR}`);
+  const bin = resolveClaudeBin();
+  if (!bin) console.log('  ⚠ claude CLI not found — chat will not work (set CLAUDE_BIN or install @anthropic-ai/claude-code)');
+  console.log('');
   watchProjects();
 });
