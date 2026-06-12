@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Dashboard</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ───────── header ───────── -->
+  <header id="topbar">
+    <div class="brand" onclick="go('chat')">
+      <span class="logo" id="logo-slot"></span>
+      <span class="brand-name">Claude<b>Dashboard</b></span>
+    </div>
+
+    <nav id="nav">
+      <button data-view="chat"     class="nav-btn active"><span class="ic" data-ic="chat"></span>Chat</button>
+      <button data-view="usage"    class="nav-btn"><span class="ic" data-ic="usage"></span>Usage</button>
+      <button data-view="sessions" class="nav-btn"><span class="ic" data-ic="sessions"></span>Sessions</button>
+      <button data-view="agents"   class="nav-btn"><span class="ic" data-ic="agents"></span>Agents</button>
+      <button data-view="tools"    class="nav-btn"><span class="ic" data-ic="tools"></span>Tools</button>
+      <button data-view="skills"   class="nav-btn"><span class="ic" data-ic="skills"></span>Skills</button>
+      <button data-view="prompts"  class="nav-btn"><span class="ic" data-ic="prompts"></span>Prompts</button>
+      <button data-view="feed"     class="nav-btn"><span class="ic" data-ic="feed"></span>Feed<span id="feed-badge" class="badge hidden">0</span></button>
+    </nav>
+
+    <div class="top-status">
+      <div id="block-meter" class="block-meter" title="Current 5h block">
+        <svg viewBox="0 0 36 36" class="ring"><circle class="ring-bg" cx="18" cy="18" r="15"/><circle id="ring-fg" class="ring-fg" cx="18" cy="18" r="15"/></svg>
+        <div class="block-meta"><span id="block-cost">$0.00</span><small id="block-time">no block</small></div>
+      </div>
+      <div class="live-dot-wrap" title="Live event stream"><span id="live-dot" class="live-dot"></span><span id="live-label">connecting</span></div>
+    </div>
+  </header>
+
+  <!-- ───────── views ───────── -->
+  <main id="views">
+
+    <!-- CHAT (default) -->
+    <section id="view-chat" class="view active">
+      <div class="chat-layout">
+        <div class="chat-main panel">
+          <div id="chat-scroll" class="chat-scroll">
+            <div id="chat-empty" class="chat-empty">
+              <div class="big-logo" id="big-logo-slot"></div>
+              <h1>Talk to Claude Code</h1>
+              <p>Messages run through your local <code>claude</code> CLI — sessions, tokens and tools land in this dashboard automatically.</p>
+              <div class="chat-suggestions">
+                <button class="sugg" data-sugg="Summarize my recent Claude Code activity">Summarize my recent activity</button>
+                <button class="sugg" data-sugg="List the files in this directory and explain the project">Explore current project</button>
+                <button class="sugg" data-sugg="What can you help me with?">What can you do?</button>
+              </div>
+            </div>
+            <div id="chat-msgs"></div>
+          </div>
+          <div class="chat-input-wrap">
+            <div class="chat-opts">
+              <select id="chat-model" title="Model">
+                <option value="">default model</option>
+                <option value="opus">opus</option>
+                <option value="sonnet">sonnet</option>
+                <option value="haiku">haiku</option>
+              </select>
+              <select id="chat-perm" title="Permission mode">
+                <option value="default">ask permissions</option>
+                <option value="acceptEdits">accept edits</option>
+                <option value="plan">plan mode</option>
+                <option value="bypassPermissions">bypass permissions</option>
+              </select>
+              <input id="chat-cwd" type="text" placeholder="working dir (optional, e.g. ~/GIT/myproject)" spellcheck="false">
+              <button id="chat-new" class="ghost-btn" title="Start new session">+ new session</button>
+            </div>
+            <div class="chat-box">
+              <textarea id="chat-input" rows="1" placeholder="Message Claude Code…  (Enter to send, Shift+Enter for newline)"></textarea>
+              <button id="chat-send" class="send-btn" title="Send"><span class="ic" data-ic="send"></span></button>
+            </div>
+          </div>
+        </div>
+        <aside class="chat-side">
+          <div class="panel side-card">
+            <h3><span class="ic" data-ic="pulse"></span> Now</h3>
+            <div id="side-now" class="side-stats"></div>
+          </div>
+          <div class="panel side-card grow">
+            <h3><span class="ic" data-ic="sessions"></span> Recent sessions</h3>
+            <div id="side-sessions" class="side-list"></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- USAGE -->
+    <section id="view-usage" class="view">
+      <div class="view-head"><h2>Token usage &amp; cost</h2><span class="muted" id="usage-sub"></span></div>
+      <div id="usage-cards" class="cards"></div>
+      <div class="grid-2">
+        <div class="panel"><h3>Daily cost — last 30 days</h3><div id="chart-daily"></div></div>
+        <div class="panel"><h3>Tokens by day</h3><div id="chart-tokens"></div></div>
+      </div>
+      <div class="grid-2">
+        <div class="panel"><h3>Cost by model</h3><div id="chart-models" class="donut-wrap"></div></div>
+        <div class="panel"><h3>5-hour billing blocks</h3><div id="chart-blocks"></div></div>
+      </div>
+    </section>
+
+    <!-- SESSIONS -->
+    <section id="view-sessions" class="view">
+      <div class="view-head">
+        <h2>Sessions</h2>
+        <input id="session-filter" class="filter-input" type="text" placeholder="filter by project / prompt…">
+      </div>
+      <div id="sessions-list" class="session-grid"></div>
+    </section>
+
+    <!-- SESSION DETAIL -->
+    <section id="view-session" class="view">
+      <div class="view-head"><button class="ghost-btn" onclick="go('sessions')">← back</button><h2 id="session-title">Session</h2></div>
+      <div id="session-meta" class="cards"></div>
+      <div class="grid-2">
+        <div class="panel grow"><h3>Transcript</h3><div id="session-transcript" class="transcript"></div></div>
+        <div>
+          <div class="panel"><h3>Agent graph</h3><div id="session-graph"></div></div>
+          <div class="panel"><h3>Tools used</h3><div id="session-tools"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- AGENTS -->
+    <section id="view-agents" class="view">
+      <div class="view-head"><h2>Agent orchestration</h2><span class="muted">sub-agents spawned via the Task tool, grouped by session</span></div>
+      <div id="agents-list"></div>
+    </section>
+
+    <!-- TOOLS -->
+    <section id="view-tools" class="view">
+      <div class="view-head"><h2>Tool usage</h2></div>
+      <div class="grid-2">
+        <div class="panel"><h3>Leaderboard</h3><div id="tools-board"></div></div>
+        <div class="panel"><h3>Recent invocations</h3><div id="tools-recent" class="feed-list"></div></div>
+      </div>
+    </section>
+
+    <!-- SKILLS -->
+    <section id="view-skills" class="view">
+      <div class="view-head"><h2>Skills, commands &amp; agent definitions</h2></div>
+      <div id="skills-list"></div>
+    </section>
+
+    <!-- PROMPTS -->
+    <section id="view-prompts" class="view">
+      <div class="view-head">
+        <h2>Prompt history</h2>
+        <input id="prompt-filter" class="filter-input" type="text" placeholder="search prompts…">
+      </div>
+      <div id="prompts-list" class="prompt-list"></div>
+    </section>
+
+    <!-- FEED -->
+    <section id="view-feed" class="view">
+      <div class="view-head">
+        <h2>Live event feed</h2>
+        <div class="feed-controls">
+          <label class="chk"><input type="checkbox" id="feed-pause"> pause</label>
+          <button class="ghost-btn" id="feed-clear">clear</button>
+        </div>
+      </div>
+      <div id="feed-list" class="feed-list panel"></div>
+    </section>
+
+  </main>
+</div>
+
+<script src="icons.js"></script>
+<script src="charts.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

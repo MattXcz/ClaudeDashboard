@@ -1,0 +1,13 @@
+{
+  "name": "claude-dashboard",
+  "version": "1.0.0",
+  "description": "Local browser dashboard for Claude Code — chat, usage, sessions, tools, agents, skills, live event feed",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
